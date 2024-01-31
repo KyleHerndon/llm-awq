@@ -17,6 +17,7 @@ def simple_dispatch_model(model, device_map):
         return model
 
     tied_params = accelerate.utils.modeling.find_tied_parameters(model)
+    #main_device = "cpu"
     if set(device_map.values()) == {"cpu"} or set(device_map.values()) == {"cpu", "disk"}:
         main_device = "cpu"
     else:

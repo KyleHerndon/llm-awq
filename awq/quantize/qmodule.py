@@ -1,8 +1,9 @@
 import math
 import torch
 import torch.nn as nn
-import awq_inference_engine  # with CUDA kernels
+#import awq_inference_engine  # with CUDA kernels
 
+from shark_turbine.runtime.op_reg.base import CustomOp, KernelSelection, KernelBuilder
 
 def make_divisible(c, divisor):
     return (c + divisor - 1) // divisor
@@ -32,6 +33,25 @@ class ScaledActivation(nn.Module):
     def forward(self, x):
         return self.act(x) / self.scales.view(1, 1, -1).to(x.device)
 
+@CustomOp.register
+class awq_mm(CustomOp):
+    name = "awq_mm"
+    signature = "(Tensor a, Tensor b, Tensor c, Tensor d, int e, int f) -> Tensor"
+
+    def select(self, ksel: KernelSelection):
+        a = ksel.arg_tensor(0)
+        b = ksel.arg_tensor(1)
+        c = ksel.arg_tensor(2)
+        d = ksel.arg_tensor(3)
+        e = ksel.arg_int(4)
+        f = ksel.arg_int(5)
+        ksel.return_tensor(a.t)
+
+    def generate(self, ksel: KernelSelection, kb: KernelBuilder):
+        # This just yields the IR value of kernel input as the output.
+        # Effectively in eager mode, this is a `return` from the kernel
+        # function.
+        kb.yield_results(kb.arg_bindings[0])
 
 class WQLinear(nn.Module):
     def __init__(self, w_bit, group_size, in_features, out_features, bias, dev):
@@ -124,14 +144,15 @@ class WQLinear(nn.Module):
     def forward(self, x):
         out_shape = x.shape[:-1] + (self.out_features, )
         inputs = x.reshape(-1, x.shape[-1])
-        if inputs.shape[0] > 8:
-            out = awq_inference_engine.gemm_forward_cuda(inputs, self.qweight, self.scales, self.qzeros, self.group_size, self.split_k_iters)
-        else:
-            out = awq_inference_engine.gemv_forward_cuda(inputs, self.qweight, self.scales, self.qzeros, self.group_size)
-        out = out + self.bias if self.bias is not None else out
+        #if inputs.shape[0] > 8:
+        #    out = awq_inference_engine.gemm_forward_cuda(inputs, self.qweight, self.scales, self.qzeros, self.group_size, self.split_k_iters)
+        #else:
+        #    out = awq_inference_engine.gemv_forward_cuda(inputs, self.qweight, self.scales, self.qzeros, self.group_size)
+        #out = out + self.bias if self.bias is not None else out
         #print(out)
         #assert 0
-        return out.reshape(out_shape)
+        #return out.reshape(out_shape)
+        return awq_mm(inputs, self.qweight, self.scales, self.qzeros, self.group_size, self.split_k_iters)
     
     def extra_repr(self) -> str:
         return 'in_features={}, out_features={}, bias={}, w_bit={}, group_size={}'.format(

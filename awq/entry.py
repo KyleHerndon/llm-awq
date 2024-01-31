@@ -23,6 +23,8 @@ from datasets import load_dataset
 from torch import nn
 import tqdm
 
+import shark_turbine.aot as aot
+from iree.compiler.ir import Context
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--model_path", type=str, help="path of the hf model")
@@ -132,6 +134,10 @@ def build_model_and_enc(model_path):
         # Dispatch model
         model = simple_dispatch_model(model, device_map=device_map)
 
+        print(model)
+        print(model.forward.__code__.co_varnames)
+        
+
         model.eval()
     else:  # fp16 to quantized
         args.run_awq &= not args.load_awq  # if load_awq, no need to run awq
@@ -141,7 +147,9 @@ def build_model_and_enc(model_path):
             model_path, config=config, trust_remote_code=True, **kwargs
         )
 
-        model.eval()
+        compiled_model = torch.compile(model, backend="turbine_cpu")
+        
+        compiled_model.eval()
 
         if args.run_awq:
             assert args.dump_awq, "Please save the awq results with --dump_awq"
@@ -238,6 +246,16 @@ def main():
                     model.device
                 )
                 with torch.no_grad():
+                    from shark_turbine.transforms.quantization import mm_group_quant
+                    print(model)
+                    print(batch.shape)
+                    print(batch)
+                    exported = aot.export(model, batch)
+                    mm_group_quant.AWQMMGroupQuantRewriterPass(
+                            exported.mlir_module
+                           ).run()
+                    exported.print_readable()
+                    #exported.save_mlir("awq.mlir")
                     lm_logits = model(batch).logits
                 shift_logits = lm_logits[:, :-1, :].contiguous().float()
                 shift_labels = testenc[
@@ -262,6 +280,7 @@ def main():
             task_names = args.tasks.split(",")
 
             lm_eval_model = LMEvalAdaptor(args.model_path, model, enc, args.batch_size)
+            
             results = evaluator.simple_evaluate(
                 model=lm_eval_model,
                 tasks=task_names,
